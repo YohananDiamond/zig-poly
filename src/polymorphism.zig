@@ -50,8 +50,6 @@ pub fn Interface(comptime VTableT: type) type {
         }
 
         pub const dynamicInit = Impl(.Dyn).init;
-
-        // TODO: pub fn autoStaticInit() or something
     };
 }
 
