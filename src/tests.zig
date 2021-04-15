@@ -5,7 +5,7 @@ const poly = @import("polymorphism.zig");
 
 const MagicNumber = poly.Interface(struct {
     getMagicNumber: fn (self: *poly.SelfType) u8,
-});
+}, .{});
 
 const Five = struct {
     const Self = @This();

@@ -10,7 +10,11 @@ test "entry point" {
 
 pub const SelfType = opaque {};
 
-pub fn Interface(comptime VTableT: type) type {
+pub const InterfaceOptions = struct {
+    async_call_stack_size: usize = 1 * 1024 * 1024,
+};
+
+pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) type {
     validateVTable(VTableT);
 
     return struct {
@@ -94,21 +98,34 @@ fn expectIsMutablePointer(comptime PointerType: type) void {
 }
 
 fn validateVTable(comptime VTableT: type) void {
-    const type_info = switch (@typeInfo(VTableT)) {
-        .Struct => |info| info,
+    const v_info = switch (@typeInfo(VTableT)) {
+        .Struct => |v_info| v_info,
         else => |tag| @compileError("VTable should be a struct (found " ++ @tagName(tag) ++ ")"),
     };
 
-    for (type_info.decls) |decl| {
+    for (v_info.decls) |decl| {
         switch (decl.data) {
-            .Fn => @compileError("-> TODO: support non-overridable function declarations inside VTables"),
+            .Fn => |f| if (isMethod(f.fn_type)) {
+                fmtError("VTable non-overridable function {s} must not be a method", .{decl.name});
+                // TODO: do this same error if any `*SelfType` argument is found... for now
+            } else {
+                non_overridable_funcs = non_overridable_funcs ++ decl.name;
+            },
             .Type, .Var => {},
         }
 
         // TODO: handle decls that override field names
     }
 
-    for (type_info.fields) |field| {
+    for (v_info.fields) |field| {
+        // TODO: handle optional fields
+
+        for (v_info.decls) |decl| {
+            if (decl.name == field.name) {
+                fmtError("VTable field {s} conflicts with declaration of same name", .{field.name});
+            }
+        }
+
         const field_type = field.field_type;
 
         if (field.is_comptime) {
@@ -116,16 +133,24 @@ fn validateVTable(comptime VTableT: type) void {
         }
 
         if (field.default_value != null) {
-            @compileError("-> TODO: handle default values on VTable fields"); // NOTE: they should probably be prohibited
+            @compileError("-> TODO: handle default values on VTable fields");
         }
 
         switch (@typeInfo(field_type)) {
-            .Fn => |_| {},
+            .Fn => |fn_info| {
+                if (fn_info.is_generic) {
+                    fmtError("-> TODO: support generic functions ({})", .{field.name});
+                }
+
+                switch (fn_info.calling_convention) {
+                    .Unspecified, .Async => {},
+                    else => @compileError("-> TODO: support more calling conventions"),
+                }
+            },
             else => @compileError("-> TODO: support non-function VTable fields"),
         }
-    }
 
-    unreachable; // TODO
+    }
 }
 
 fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
@@ -158,7 +183,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
 
                 // Compare caling conventions
                 if (v_fn.calling_convention != impl_fn.calling_convention) {
-                    fmtError("Impl fn has wrong calling convention (expected {}, found {})", .{v_fn.calling_convention, impl_fn.calling_convention});
+                    fmtError("Impl fn has wrong calling convention (expected {}, found {})", .{ v_fn.calling_convention, impl_fn.calling_convention });
                 }
 
                 // Compare amount of args
@@ -238,14 +263,12 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
     // As for the fields, we don't need to check them. We won't really be using them.
 
     // TODO: is there anything more?
-
-    unreachable; // TODO
 }
 
 fn isMethod(comptime FunctionType: type) bool {
     return switch (@typeInfo(FunctionType)) {
         .Fn => |info| blk: {
-            const first_arg_type = if (args.len > 0) (args[0].arg_type orelse break :blk false) else break :blk false;
+            const first_arg_type = if (info.args.len > 0) info.args[0].arg_type.? else break :blk false;
             break :blk first_arg_type == *SelfType or first_arg_type == *const SelfType;
         },
         else => |_| @compileError("Expected function type, found " ++ @typeName(FunctionType)),
