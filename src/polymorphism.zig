@@ -1,4 +1,5 @@
 const std = @import("std");
+const meta = std.meta;
 
 const builtin = @import("builtin");
 const StructField = builtin.TypeInfo.StructField;
@@ -22,8 +23,21 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
     validateVTable(VTableT);
 
     return struct {
-        pub fn Impl(comptime Target: anytype) type {
-            return if (@typeInfo(@TypeOf(Target)) == .EnumLiteral and Target == .Dyn) struct {
+        pub fn Impl(comptime _target: anytype) type {
+            const TargetType = union(enum) {
+                Dynamic: void,
+                Static: type,
+            };
+
+            const target: TargetType = switch (@typeInfo(@TypeOf(_target))) {
+                .EnumLiteral => if (_target == .Dyn) .{ .Dynamic = {} } else {
+                    fmtError("Invalid impl target (expected .Dyn or type, found .{})", .{@tagName(_target)});
+                },
+                .Type => .{ .Static = _target },
+                else => fmtError("Invalid impl target (expected .Dyn or type, found {})", .{@TypeOf(_target)}),
+            };
+
+            return if (unwrapUnion(target, .Dynamic)) |_| struct {
                 vtable_ptr: *const VTableT,
                 object_ptr: *SelfType,
 
@@ -31,7 +45,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     const ChildType = PointerChildType(@TypeOf(ptr));
                     expectIsMutablePointer(@TypeOf(ptr));
 
-                    return @call(.{ .modifier = .AlwaysInline }, initNoInfer, .{ ChildType, ptr });
+                    return @call(.{ .modifier = .always_inline }, initNoInfer, .{ ChildType, ptr });
                 }
 
                 /// TODO: header
@@ -41,7 +55,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 /// This is called internally by `init`.
                 pub fn initNoInfer(comptime T: type, ptr: *T) @This() {
                     comptime validateVTableImpl(VTableT, T);
-                    const vtable_ptr = comptime getTypeVTable(T);
+                    const vtable_ptr = comptime getImplVTable(VTableT, T);
 
                     return .{
                         .vtable_ptr = vtable_ptr,
@@ -56,7 +70,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                         .object_ptr = erased_ptr,
                     };
                 }
-            } else if (@TypeOf(Target) == type) struct {
+            } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
 
                 comptime {
@@ -72,9 +86,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 pub fn asDyn(self: Self) Impl(.Dyn) {
                     return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initNoInfer, self.object_ptr);
                 }
-            } else {
-                @compileError("Invalid impl target (expected either a type or .Dyn, found " ++ @typeName(@TypeOf(Target)) ++ ")");
-            };
+            } else unreachable;
         }
 
         pub fn staticInit(ptr: anytype) Impl(PointerChildType(@TypeOf(ptr))) {
@@ -280,4 +292,8 @@ fn getDecl(comptime VTableT: type, comptime name: []const u8) ?Declaration {
     for (@typeInfo(VTableT.Struct.decls)) |decl| {
         if (decl.name == name) return decl;
     } else return null;
+}
+
+fn getImplVTable(comptime VTableT: type, comptime ImplT: type) *const VTableT {
+    unreachable;
 }
