@@ -4,6 +4,10 @@ const builtin = @import("builtin");
 const StructField = builtin.TypeInfo.StructField;
 const Declaration = builtin.TypeInfo.Declaration;
 
+const utils = @import("utils.zig");
+const fmtError = utils.fmtError;
+const unwrapUnion = utils.unwrapUnion;
+
 test "entry point" {
     _ = @import("tests.zig");
 }
@@ -149,7 +153,6 @@ fn validateVTable(comptime VTableT: type) void {
             },
             else => @compileError("-> TODO: support non-function VTable fields"),
         }
-
     }
 }
 
@@ -169,13 +172,13 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 .Type, .Var => |type_| type_,
             };
 
-            if (unwrap(@typeInfo(v_field.field_type), .Fn)) |v_fn| {
+            if (unwrapUnion(@typeInfo(v_field.field_type), .Fn)) |v_fn| {
                 // The field is a function.
                 //
                 // Since, for the impl, SelfType is gonna be the type of the impl, we need to iterate over the args to
                 // compare that.
 
-                const impl_fn = if (unwrap(@typeInfo(v_field.field_type), .Fn)) |info|
+                const impl_fn = if (unwrapUnion(@typeInfo(v_field.field_type), .Fn)) |info|
                     info
                 else
                     // TODO: use a different name than "impl target ..." because this is really confusing
@@ -244,14 +247,6 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     fmtError("Impl target declaration is of wrong type (expected {}, found {})", .{ v_field.field_type, decl_type });
                 }
             }
-
-            if (isMethod(v_field.field_type)) {
-                // TODO: Check if the method has the correct signature.
-            } else {
-                // The original field is not a method type, and since because of that we won't have a potential erasable
-                // *SelfType, we can simply compare the field types.
-
-            }
         } else if (getDecl(VTableT, decl.name)) |v_decl| {
             // This declaration is overriding one that already were available at the
             // FIXME: should this be allowed for vtable private declarations?
@@ -275,11 +270,6 @@ fn isMethod(comptime FunctionType: type) bool {
     };
 }
 
-fn fmtError(comptime fmt: []const u8, comptime args: anytype) noreturn {
-    const err_string = std.fmt.comptimePrint(fmt, args);
-    @compileError(err_string);
-}
-
 fn getField(comptime VTableT: type, comptime name: []const u8) ?StructField {
     for (@typeInfo(VTableT.Struct.fields)) |field| {
         if (field.name == name) return field;
@@ -290,11 +280,4 @@ fn getDecl(comptime VTableT: type, comptime name: []const u8) ?Declaration {
     for (@typeInfo(VTableT.Struct.decls)) |decl| {
         if (decl.name == name) return decl;
     } else return null;
-}
-
-/// Get a specific variant of an union, or return null.
-///
-/// Inspired from https://github.com/ziglang/zig/issues/8109#issuecomment-787959353
-fn unwrap(union_: anytype, comptime tag: std.meta.Tag(@TypeOf(union_))) ?std.meta.TagPayload(@TypeOf(union_), tag) {
-    return if (union_ != tag) null else @field(union_, @tagName(tag));
 }
