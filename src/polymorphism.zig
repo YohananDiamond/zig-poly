@@ -55,11 +55,11 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 /// This is called internally by `init`.
                 pub fn initNoInfer(comptime T: type, ptr: *T) @This() {
                     comptime validateVTableImpl(VTableT, T);
-                    const vtable_ptr = comptime getImplVTable(VTableT, T);
+                    const vtable_ptr = comptime vTableGetImpl(VTableT, T);
 
                     return .{
                         .vtable_ptr = vtable_ptr,
-                        .object_ptr = @ptrCast(*SelfType, ptr),
+                        .object_ptr = makeSelfPtr(T, ptr),
                     };
                 }
 
@@ -137,8 +137,8 @@ fn validateVTable(comptime VTableT: type) void {
         // TODO: handle optional fields
 
         for (v_info.decls) |decl| {
-            if (decl.name == field.name) {
-                fmtError("VTable field {s} conflicts with declaration of same name", .{field.name});
+            if (decl.is_pub and decl.name == field.name) {
+                fmtError("VTable field {s} conflicts with public declaration of same name", .{field.name});
             }
         }
 
@@ -190,7 +190,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 // Since, for the impl, SelfType is gonna be the type of the impl, we need to iterate over the args to
                 // compare that.
 
-                const impl_fn = if (unwrapUnion(@typeInfo(v_field.field_type), .Fn)) |info|
+                const impl_fn = if (unwrapUnion(@typeInfo(decl_type), .Fn)) |info|
                     info
                 else
                     // TODO: use a different name than "impl target ..." because this is really confusing
@@ -260,10 +260,13 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 }
             }
         } else if (getDecl(VTableT, decl.name)) |v_decl| {
-            // This declaration is overriding one that already were available at the
-            // FIXME: should this be allowed for vtable private declarations?
-
-            // TODO
+            // This declaration is overriding one that already was defined in the VTable.
+            //
+            // We can allow this if the VTable declaration is private, since it is only used inside the VTable
+            // declaration.
+            if (v_decl.is_pub) {
+                fmtError("Impl target declaration {s} overrides public declaration of same name in VTable type", .{decl.name});
+            }
         }
     }
 
@@ -289,11 +292,32 @@ fn getField(comptime VTableT: type, comptime name: []const u8) ?StructField {
 }
 
 fn getDecl(comptime VTableT: type, comptime name: []const u8) ?Declaration {
-    for (@typeInfo(VTableT.Struct.decls)) |decl| {
+    for (@typeInfo(VTableT).Struct.decls) |decl| {
         if (decl.name == name) return decl;
     } else return null;
 }
 
-fn getImplVTable(comptime VTableT: type, comptime ImplT: type) *const VTableT {
-    unreachable;
+fn makeSelfPtr(comptime Source: type, ptr: *Source) *SelfType {
+    return if (@sizeOf(Source) > 0) @ptrCast(*SelfType, ptr)
+    else
+        undefined;
+}
+
+/// NOTE: only call this if VTableT is already verified and ImplT is verified as a member of VTableT
+fn vTableGetImpl(comptime VTableT: type, comptime ImplT: type) *const VTableT {
+    return comptime blk: {
+        var vtable: VTableT = undefined;
+
+        for (@typeInfo(VTableT).Struct.fields) |v_field| {
+            const FieldType = @TypeOf(@field(vtable, v_field.name));
+            const impl_decl = @field(ImplT, v_field.name);
+
+            @field(vtable, v_field.name) = if (meta.trait.is(.Fn)(FieldType))
+                @ptrCast(@TypeOf(@field(vtable, v_field.name)), impl_decl)
+            else
+                impl_decl;
+        }
+
+        break :blk &vtable;
+    };
 }
