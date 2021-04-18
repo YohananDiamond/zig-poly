@@ -27,14 +27,14 @@ test "simple static dispatching" {
     var five_n = Five{};
     const magic_num = MagicNumber.staticInit(&five_n);
 
-    // testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
+    testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
 }
 
 test "simple dynamic dispatching" {
     var five_n = Five{};
     const magic_num = MagicNumber.dynamicInit(&five_n);
 
-    // testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
+    testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
 }
 
 test "dynamic dispatching inside array" {
@@ -47,6 +47,6 @@ test "dynamic dispatching inside array" {
     try list.append(MagicNumber.dynamicInit(&five_n));
     try list.append(MagicNumber.dynamicInit(&six_n));
 
-    // testing.expect(list.items[0].call("getMagicNumber", .{}) == 5);
-    // testing.expect(list.items[0].call("getMagicNumber", .{}) == 6);
+    testing.expect(list.items[0].call("getMagicNumber", .{}) == 5);
+    testing.expect(list.items[1].call("getMagicNumber", .{}) == 6);
 }

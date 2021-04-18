@@ -30,7 +30,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
             };
 
             const target: TargetType = switch (@typeInfo(@TypeOf(_target))) {
-                .EnumLiteral => if (_target == .Dyn) .{ .Dynamic = {} } else {
+                .EnumLiteral => if (_target == .Dyn) .Dynamic else {
                     fmtError("Invalid impl target (expected .Dyn or type, found .{})", .{@tagName(_target)});
                 },
                 .Type => .{ .Static = _target },
@@ -70,6 +70,26 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                         .object_ptr = erased_ptr,
                     };
                 }
+
+                pub fn call(
+                    self: @This(),
+                    comptime name: []const u8,
+                    args: anytype,
+                ) callconv(.Inline) VTableFuncReturnType(VTableT, name) {
+                    // VTableFuncReturnType already asserts the following type is a function, so we don't need to worry
+                    // about that.
+                    const func_type = comptime VTableFieldType(VTableT, name);
+
+                    const fn_ptr = @field(self.vtable_ptr, name);
+
+                    if (comptime isMethod(func_type)) {
+                        return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
+                    } else {
+                        return @call(.{}, fn_ptr, args);
+                    }
+
+                    return @call(.{}, fn_ptr, args);
+                }
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
 
@@ -77,7 +97,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     validateVTableImpl(VTableT, Target);
                 }
 
-                pub const vtable_ptr: *const VTableT = comptime getTypeVTable(Target);
+                pub const vtable_ptr: *const VTableT = comptime vTableGetImpl(VTableT, Target);
 
                 pub fn init(ptr: *Target) @This() {
                     return .{ .object_ptr = ptr };
@@ -85,6 +105,24 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
                 pub fn asDyn(self: Self) Impl(.Dyn) {
                     return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initNoInfer, self.object_ptr);
+                }
+
+                pub fn call(
+                    self: @This(),
+                    comptime name: []const u8,
+                    args: anytype,
+                ) callconv(.Inline) VTableFuncReturnType(VTableT, name) {
+                    // VTableFuncReturnType already asserts the following type is a function, so we don't need to worry
+                    // about that.
+                    const func_type = comptime VTableFieldType(VTableT, name);
+
+                    const fn_ptr = comptime @field(vtable_ptr, name);
+
+                    if (comptime isMethod(func_type)) {
+                        return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
+                    } else {
+                        return @call(.{}, fn_ptr, args);
+                    }
                 }
             } else unreachable;
         }
@@ -116,7 +154,7 @@ fn expectIsMutablePointer(comptime PointerType: type) void {
 fn validateVTable(comptime VTableT: type) void {
     const v_info = switch (@typeInfo(VTableT)) {
         .Struct => |v_info| v_info,
-        else => |tag| @compileError("VTable should be a struct (found " ++ @tagName(tag) ++ ")"),
+        else => |tag| fmtError("VTable should be a struct (found {})", .{@tagName(tag)}),
     };
 
     for (v_info.decls) |decl| {
@@ -159,7 +197,7 @@ fn validateVTable(comptime VTableT: type) void {
                 }
 
                 switch (fn_info.calling_convention) {
-                    .Unspecified, .Async => {},
+                    .Unspecified => {},
                     else => @compileError("-> TODO: support more calling conventions"),
                 }
             },
@@ -276,31 +314,48 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
 }
 
 fn isMethod(comptime FunctionType: type) bool {
-    return switch (@typeInfo(FunctionType)) {
-        .Fn => |info| blk: {
-            const first_arg_type = if (info.args.len > 0) info.args[0].arg_type.? else break :blk false;
-            break :blk first_arg_type == *SelfType or first_arg_type == *const SelfType;
-        },
-        else => |_| @compileError("Expected function type, found " ++ @typeName(FunctionType)),
-    };
+    const info = comptime @typeInfo(FunctionType).Fn;
+
+    if (info.args.len == 0)
+        return false;
+
+    const first_arg_type = info.args[0].arg_type.?;
+    return first_arg_type == *SelfType or first_arg_type == *const SelfType;
 }
 
 fn getField(comptime VTableT: type, comptime name: []const u8) ?StructField {
     for (@typeInfo(VTableT.Struct.fields)) |field| {
         if (field.name == name) return field;
-    } else return null;
+    }
+
+    return null;
 }
 
 fn getDecl(comptime VTableT: type, comptime name: []const u8) ?Declaration {
     for (@typeInfo(VTableT).Struct.decls) |decl| {
         if (decl.name == name) return decl;
-    } else return null;
+    }
+
+    return null;
 }
 
 fn makeSelfPtr(comptime Source: type, ptr: *Source) *SelfType {
-    return if (@sizeOf(Source) > 0) @ptrCast(*SelfType, ptr)
-    else
-        undefined;
+    return if (@sizeOf(Source) > 0) @ptrCast(*SelfType, ptr) else undefined;
+}
+
+fn VTableFieldType(comptime VTableT: type, comptime name: []const u8) type {
+    const FieldsT = meta.FieldEnum(VTableT);
+
+    return meta.fieldInfo(VTableT, @field(FieldsT, name)).field_type;
+}
+
+fn VTableFuncReturnType(comptime VTableT: type, comptime name: []const u8) type {
+    const field_type = VTableFieldType(VTableT, name);
+
+    return switch (@typeInfo(field_type)) {
+        .Fn => |info| info.return_type.?,
+        else => fmtError("field \"{s}\" is not a function (found {})", .{ name, field_type }),
+    };
 }
 
 /// NOTE: only call this if VTableT is already verified and ImplT is verified as a member of VTableT
