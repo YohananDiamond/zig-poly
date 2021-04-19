@@ -2,7 +2,7 @@
 
 Another attempt at zig polymorphism.
 
-Main inspiration (I literally technically part of the code from there):
+Main inspiration (I technically stole part of the code from there):
 https://github.com/alexnask/interface.zig
 
 I'm not even sure if this is adding anything significantly better than
