@@ -87,8 +87,6 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     } else {
                         return @call(.{}, fn_ptr, args);
                     }
-
-                    return @call(.{}, fn_ptr, args);
                 }
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
@@ -118,6 +116,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
                     const fn_ptr = comptime @field(vtable_ptr, name);
 
+                    // TODO: this will error out if args refers any other `SelfType` argument other than the first arg.
                     if (comptime isMethod(func_type)) {
                         return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
                     } else {
