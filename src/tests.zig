@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 
-const poly = @import("polymorphism.zig");
+const poly = @import("poly.zig");
 
 const MagicNumber = poly.Interface(struct {
     getMagicNumber: fn (self: *poly.SelfType) u8,
@@ -49,4 +49,31 @@ test "dynamic dispatching inside array" {
 
     testing.expect(list.items[0].call("getMagicNumber", .{}) == 5);
     testing.expect(list.items[1].call("getMagicNumber", .{}) == 6);
+}
+
+test "check if is interface" {
+    testing.expect(MagicNumber.isParentOf(MagicNumber.Impl(.Dyn)));
+    testing.expect(MagicNumber.isParentOf(MagicNumber.Impl(Five)));
+    testing.expect(MagicNumber.isParentOf(MagicNumber.Impl(Six)));
+    testing.expect(!MagicNumber.isParentOf(i32));
+}
+
+test "function that takes interface as parameter (explicit impl kind)" {
+    const local = struct {
+        fn function(comptime impl_k: anytype, impl: MagicNumber.Impl(impl_k)) u8 {
+            return impl.call("getMagicNumber", .{});
+        }
+    };
+
+    {
+        var five_n = Five{};
+        const result = local.function(Five, MagicNumber.staticInit(&five_n));
+        testing.expect(result == 5);
+    }
+
+    {
+        var six_n = Six{};
+        const result = local.function(.Dyn, MagicNumber.dynamicInit(&six_n));
+        testing.expect(result == 6);
+    }
 }

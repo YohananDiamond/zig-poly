@@ -7,11 +7,18 @@ const Declaration = builtin.TypeInfo.Declaration;
 
 const utils = @import("utils.zig");
 const fmtError = utils.fmtError;
+const identQuote = utils.identQuote;
 const unwrapUnion = utils.unwrapUnion;
 
 test "entry point" {
+    // Tests
     _ = @import("tests.zig");
+
+    // Related modules & stuff
+    std.testing.refAllDecls(@This());
 }
+
+// TODO: proper error messages for every compile-error here
 
 pub const SelfType = opaque {};
 
@@ -23,18 +30,32 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
     validateVTable(VTableT);
 
     return struct {
-        pub fn Impl(comptime _target: anytype) type {
-            const TargetType = union(enum) {
+        const IFaceSelf = @This();
+
+        pub fn isParentOf(comptime ImplT: type) bool { // TODO: find a better name
+            comptime {
+                if (!meta.trait.is(.Struct)(ImplT))
+                    return false;
+
+                if (!@hasDecl(ImplT, "_InterfaceType"))
+                    return false;
+
+                return ImplT._InterfaceType == IFaceSelf; // FIXME: might error out on a specific situation
+            }
+        }
+
+        pub fn Impl(comptime target_: anytype) type {
+            const TargetKind = union(enum) {
                 Dynamic: void,
                 Static: type,
             };
 
-            const target: TargetType = switch (@typeInfo(@TypeOf(_target))) {
-                .EnumLiteral => if (_target == .Dyn) .Dynamic else {
-                    fmtError("Invalid impl target (expected .Dyn or type, found .{})", .{@tagName(_target)});
+            const target: TargetKind = switch (@typeInfo(@TypeOf(target_))) {
+                .EnumLiteral => if (target_ == .Dyn) .Dynamic else {
+                    fmtError("Invalid impl target (expected .Dyn or type, found .{})", .{@tagName(target_)});
                 },
-                .Type => .{ .Static = _target },
-                else => fmtError("Invalid impl target (expected .Dyn or type, found {})", .{@TypeOf(_target)}),
+                .Type => .{ .Static = target_ },
+                else => fmtError("Invalid impl target (expected .Dyn or type, found {})", .{@TypeOf(target_)}),
             };
 
             return if (unwrapUnion(target, .Dynamic)) |_| struct {
@@ -45,15 +66,15 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     const ChildType = PointerChildType(@TypeOf(ptr));
                     expectIsMutablePointer(@TypeOf(ptr));
 
-                    return @call(.{ .modifier = .always_inline }, initNoInfer, .{ ChildType, ptr });
+                    return @call(.{ .modifier = .always_inline }, initSpecific, .{ ChildType, ptr });
                 }
 
-                /// TODO: header
+                /// Initializes the interface while specifying a specific type.
                 ///
                 /// Does the same as `init`, but doesn't infer anything, requiring the explicit type.
                 ///
                 /// This is called internally by `init`.
-                pub fn initNoInfer(comptime T: type, ptr: *T) @This() {
+                pub fn initSpecific(comptime T: type, ptr: *T) @This() {
                     comptime validateVTableImpl(VTableT, T);
                     const vtable_ptr = comptime vTableGetImpl(VTableT, T);
 
@@ -88,6 +109,8 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                         return @call(.{}, fn_ptr, args);
                     }
                 }
+
+                pub const _InterfaceType = IFaceSelf;
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
 
@@ -102,7 +125,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 }
 
                 pub fn asDyn(self: Self) Impl(.Dyn) {
-                    return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initNoInfer, self.object_ptr);
+                    return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initSpecific, self.object_ptr);
                 }
 
                 pub fn call(
@@ -116,13 +139,15 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
                     const fn_ptr = comptime @field(vtable_ptr, name);
 
-                    // TODO: this will error out if args refers any other `SelfType` argument other than the first arg.
+                    // FIXME: this will error out if args refers any other `SelfType` argument other than the first arg.
                     if (comptime isMethod(func_type)) {
                         return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
                     } else {
                         return @call(.{}, fn_ptr, args);
                     }
                 }
+
+                pub const _InterfaceType = IFaceSelf;
             } else unreachable;
         }
 
@@ -158,11 +183,8 @@ fn validateVTable(comptime VTableT: type) void {
 
     for (v_info.decls) |decl| {
         switch (decl.data) {
-            .Fn => |f| if (isMethod(f.fn_type)) {
-                fmtError("VTable non-overridable function {s} must not be a method", .{decl.name});
-                // TODO: do this same error if any `*SelfType` argument is found... for now
-            } else {
-                non_overridable_funcs = non_overridable_funcs ++ decl.name;
+            .Fn => |fn_data| if (isMethod(fn_data.fn_type)) {
+                fmtError("VTable {s}: function decls inside must not be methods (found {s})", .{ @typeName(VTableT), identQuote(decl.name) });
             },
             .Type, .Var => {},
         }
@@ -182,11 +204,11 @@ fn validateVTable(comptime VTableT: type) void {
         const field_type = field.field_type;
 
         if (field.is_comptime) {
-            @compileError("-> TODO: handle comptime VTable fields");
+            fmtError("VTable {s}: fields cannot not be comptime (found {s})", .{ @typeName(VTableT), identQuote(field.name) });
         }
 
         if (field.default_value != null) {
-            @compileError("-> TODO: handle default values on VTable fields");
+            fmtError("VTable {s}: TODO: handle default values (found at field {s})", .{ @typeName(VTableT), identQuote(field.name) });
         }
 
         switch (@typeInfo(field_type)) {
