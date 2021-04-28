@@ -77,3 +77,30 @@ test "function that takes interface as parameter (explicit impl kind)" {
         testing.expect(result == 6);
     }
 }
+
+test "function that takes interface as parameter (implicit impl kind)" {
+    const local = struct {
+        fn function(impl: anytype) u8 {
+            if (comptime !MagicNumber.isParentOf(@TypeOf(impl))) {
+                @compileError("The passed argument is not an impl of MagicNumber.");
+            }
+
+            return impl.call("getMagicNumber", .{});
+        }
+    };
+
+    {
+        var five_n = Five{};
+        const result = local.function(MagicNumber.staticInit(&five_n));
+        testing.expect(result == 5);
+    }
+
+    {
+        var six_n = Six{};
+        const result = local.function(MagicNumber.dynamicInit(&six_n));
+        testing.expect(result == 6);
+    }
+
+    var foo: u8 = undefined;
+    _ = local.function(MagicNumber.dynamicInit(&foo));
+}

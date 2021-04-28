@@ -37,10 +37,13 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 if (!meta.trait.is(.Struct)(ImplT))
                     return false;
 
-                if (!@hasDecl(ImplT, "_InterfaceType"))
+                if (!@hasDecl(ImplT, "_InterfaceType")) // FIXME: this still errors out if the type is not a struct - maybe a compiler bug / design flaw?
                     return false;
 
-                return ImplT._InterfaceType == IFaceSelf; // FIXME: might error out on a specific situation
+                if (@TypeOf(ImplT._InterfaceType) != @TypeOf(IFaceSelf))
+                    return false;
+
+                return ImplT._InterfaceType == IFaceSelf;
             }
         }
 
