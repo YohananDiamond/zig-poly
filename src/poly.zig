@@ -12,7 +12,7 @@ const unwrapUnion = utils.unwrapUnion;
 
 test "entry point" {
     // Tests
-    _ = @import("tests.zig");
+    _ = @import("tests/entry.zig");
 
     // Related modules & stuff
     std.testing.refAllDecls(@This());
@@ -32,18 +32,14 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
     return struct {
         const IFaceSelf = @This();
 
-        pub fn isParentOf(comptime ImplT: type) bool { // TODO: find a better name
+        pub fn isBaseOf(comptime IType: type) bool { // TODO: terminology: define "base"
             comptime {
-                if (!meta.trait.is(.Struct)(ImplT))
-                    return false;
+                const field_name = "_InterfaceBaseType";
 
-                if (!@hasDecl(ImplT, "_InterfaceType")) // FIXME: this still errors out if the type is not a struct - maybe a compiler bug / design flaw?
-                    return false;
-
-                if (@TypeOf(ImplT._InterfaceType) != @TypeOf(IFaceSelf))
-                    return false;
-
-                return ImplT._InterfaceType == IFaceSelf;
+                if (!meta.trait.is(.Struct)(IType)) return false;
+                if (!@hasDecl(IType, field_name)) return false;
+                if (@TypeOf(@field(IType, field_name)) != type) return false;
+                return @field(IType, field_name) == IFaceSelf;
             }
         }
 
@@ -113,7 +109,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     }
                 }
 
-                pub const _InterfaceType = IFaceSelf;
+                pub const _InterfaceBaseType = IFaceSelf;
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
 
@@ -150,7 +146,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     }
                 }
 
-                pub const _InterfaceType = IFaceSelf;
+                pub const _InterfaceBaseType = IFaceSelf;
             } else unreachable;
         }
 
@@ -181,13 +177,13 @@ fn expectIsMutablePointer(comptime PointerType: type) void {
 fn validateVTable(comptime VTableT: type) void {
     const v_info = switch (@typeInfo(VTableT)) {
         .Struct => |v_info| v_info,
-        else => |tag| fmtError("VTable should be a struct (found {})", .{@tagName(tag)}),
+        else => |tag| fmtError("VTable {} should be a struct (found {})", .{ VTableT, @tagName(tag) }),
     };
 
     for (v_info.decls) |decl| {
         switch (decl.data) {
             .Fn => |fn_data| if (isMethod(fn_data.fn_type)) {
-                fmtError("VTable {s}: function decls inside must not be methods (found {s})", .{ @typeName(VTableT), identQuote(decl.name) });
+                fmtError("VTable {}: function decls inside must not be methods (found {s})", .{ VTableT, identQuote(decl.name) });
             },
             .Type, .Var => {},
         }
@@ -200,32 +196,32 @@ fn validateVTable(comptime VTableT: type) void {
 
         for (v_info.decls) |decl| {
             if (decl.is_pub and decl.name == field.name) {
-                fmtError("VTable field {s} conflicts with public declaration of same name", .{field.name});
+                fmtError("VTable {}: field {s} conflicts with public declaration of same name", .{ VTableT, identQuote(field.name) });
             }
         }
 
         const field_type = field.field_type;
 
         if (field.is_comptime) {
-            fmtError("VTable {s}: fields cannot not be comptime (found {s})", .{ @typeName(VTableT), identQuote(field.name) });
+            fmtError("VTable {}: fields cannot not be comptime (found {s})", .{ VTableT, identQuote(field.name) });
         }
 
         if (field.default_value != null) {
-            fmtError("VTable {s}: TODO: handle default values (found at field {s})", .{ @typeName(VTableT), identQuote(field.name) });
+            fmtError("VTable {}: TODO: handle default values (found at field {s})", .{ VTableT, identQuote(field.name) });
         }
 
         switch (@typeInfo(field_type)) {
             .Fn => |fn_info| {
                 if (fn_info.is_generic) {
-                    fmtError("-> TODO: support generic functions ({})", .{field.name});
+                    fmtError("VTable {}: TODO: support generic functions (from field {s})", .{ VTableT, field.name });
                 }
 
                 switch (fn_info.calling_convention) {
                     .Unspecified => {},
-                    else => @compileError("-> TODO: support more calling conventions"),
+                    else => fmtError("VTable {}: TODO: support more calling conventions", .{VTableT}),
                 }
             },
-            else => @compileError("-> TODO: support non-function VTable fields"),
+            else => fmtError("VTable {}: TODO: support non-function VTable fields", .{VTableT}),
         }
     }
 }
@@ -233,8 +229,13 @@ fn validateVTable(comptime VTableT: type) void {
 fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
     const impl_info = switch (@typeInfo(VTableT)) {
         .Struct => |info| info,
-        else => |tag| @compileError("Impl target should be a struct (found " ++ @tagName(tag) ++ ")"),
+        else => |tag| fmtError("VTable {} is not a struct (found {s})", .{ VTableT, @tagName(tag) }),
     };
+
+    switch (@typeInfo(ImplT)) {
+        .Struct => {},
+        else => |tag| fmtError("VTable {}: impl type {} is not a struct (found {s})", .{ VTableT, ImplT, @tagName(tag) }),
+    }
 
     // Check if the impl has all the needed methods.
     for (impl_info.decls) |decl| {
@@ -256,16 +257,16 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     info
                 else
                     // TODO: use a different name than "impl target ..." because this is really confusing
-                    fmtError("Impl target declaration is not a function (expected function, found {})", .{decl_type});
+                    fmtError("VTable {}: Impl target declaration is not a function (expected function, found {})", .{ VTableT, decl_type });
 
                 // Compare caling conventions
                 if (v_fn.calling_convention != impl_fn.calling_convention) {
-                    fmtError("Impl fn has wrong calling convention (expected {}, found {})", .{ v_fn.calling_convention, impl_fn.calling_convention });
+                    fmtError("VTable {}: Impl fn has wrong calling convention (expected {}, found {})", .{ VTableT, v_fn.calling_convention, impl_fn.calling_convention });
                 }
 
                 // Compare amount of args
                 if (impl_fn.args.len != v_fn.args.len) {
-                    fmtError("Impl target function has wrong number of arguments (expected {}, found {})", .{ v_args.len, impl_fn.args.len });
+                    fmtError("VTable {}: Impl target function has wrong number of arguments (expected {}, found {})", .{ VTableT, v_args.len, impl_fn.args.len });
                 }
 
                 // Compare arg types
@@ -274,7 +275,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     const expectType = struct {
                         pub fn func(comptime Expected: type, comptime Found: type, comptime index: usize) void {
                             if (Expected != Found)
-                                fmtError("Wrong type for arg #{}: expected {}, found {}", .{ index, Expected, Found }); // TODO: a more descriptive error message
+                                fmtError("VTable {}: wrong type for arg #{}: expected {}, found {}", .{ VTableT, index, Expected, Found }); // TODO: a more descriptive error message
                         }
                     }.func;
 
@@ -295,7 +296,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     const expectType = struct {
                         pub fn func(comptime Expected: type, comptime Found: type) void {
                             if (Expected != Found)
-                                fmtError("Wrong type for return type: expected {}, found {}", .{ Expected, Found }); // TODO: a more descriptive error message
+                                fmtError("VTable {}: wrong type for return type: expected {}, found {}", .{ VTableT, Expected, Found }); // TODO: a more descriptive error message
                         }
                     }.func;
 
@@ -310,7 +311,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 // Compare alignment
                 // FIXME: is this necessary?
                 if (impl_fn.alignment != v_fn.alignment) {
-                    fmtError("Impl target function has wrong alignment (expected {}, found {})", .{ v_fn.alignment, impl_fn.alignment });
+                    fmtError("VTable {}: impl target function has wrong alignment (expected {}, found {})", .{ VTableT, v_fn.alignment, impl_fn.alignment });
                 }
 
                 // TODO: Do something with: v_fn.is_generic
@@ -318,7 +319,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
             } else {
                 // The field is not a function - we can do a simple comparation.
                 if (decl_type != v_field.field_type) {
-                    fmtError("Impl target declaration is of wrong type (expected {}, found {})", .{ v_field.field_type, decl_type });
+                    fmtError("VTable {}: impl target declaration is of wrong type (expected {}, found {})", .{ VTableT, v_field.field_type, decl_type });
                 }
             }
         } else if (getDecl(VTableT, decl.name)) |v_decl| {
@@ -327,7 +328,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
             // We can allow this if the VTable declaration is private, since it is only used inside the VTable
             // declaration.
             if (v_decl.is_pub) {
-                fmtError("Impl target declaration {s} overrides public declaration of same name in VTable type", .{decl.name});
+                fmtError("VTable {}: impl target declaration {s} overrides public declaration of same name in VTable type", .{ VTableT, decl.name });
             }
         }
     }
@@ -378,7 +379,7 @@ fn VTableFuncReturnType(comptime VTableT: type, comptime name: []const u8) type 
 
     return switch (@typeInfo(field_type)) {
         .Fn => |info| info.return_type.?,
-        else => fmtError("field \"{s}\" is not a function (found {})", .{ name, field_type }),
+        else => fmtError("VTable {}: field \"{s}\" is not a function (found {})", .{ VTableT, name, field_type }),
     };
 }
 
