@@ -32,6 +32,9 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
     return struct {
         const IFaceSelf = @This();
 
+        pub const VTableType = VTableT;
+        pub const interface_options = options;
+
         pub fn isBaseOf(comptime IType: type) bool { // TODO: terminology: define "base"
             comptime {
                 const field_name = "_InterfaceBaseType";
@@ -51,10 +54,10 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
             const target: TargetKind = switch (@typeInfo(@TypeOf(target_))) {
                 .EnumLiteral => if (target_ == .Dyn) .Dynamic else {
-                    fmtError("Invalid impl target (expected .Dyn or type, found .{})", .{@tagName(target_)});
+                    fmtError("Invalid impl target (expected .Dyn or a type, found .{})", .{@tagName(target_)});
                 },
                 .Type => .{ .Static = target_ },
-                else => fmtError("Invalid impl target (expected .Dyn or type, found {})", .{@TypeOf(target_)}),
+                else => fmtError("Invalid impl target (expected .Dyn or a type, found {})", .{@TypeOf(target_)}),
             };
 
             return if (unwrapUnion(target, .Dynamic)) |_| struct {
@@ -177,7 +180,7 @@ fn expectIsMutablePointer(comptime PointerType: type) void {
 fn validateVTable(comptime VTableT: type) void {
     const v_info = switch (@typeInfo(VTableT)) {
         .Struct => |v_info| v_info,
-        else => |tag| fmtError("VTable {} should be a struct (found {})", .{ VTableT, @tagName(tag) }),
+        else => |tag| fmtError("VTable {} should be a struct (found {s})", .{ VTableT, identQuote(@tagName(tag)) }),
     };
 
     for (v_info.decls) |decl| {
@@ -226,23 +229,33 @@ fn validateVTable(comptime VTableT: type) void {
     }
 }
 
+/// Specialize `PossibleSelf` to a variant of `SpecializationTarget`, if possible.
+fn SelfTypeSpecializeOnto(comptime SpecializationTarget: type, comptime PossibleSelf: type) type {
+    return switch (PossibleSelf) {
+        SelfType => SpecializationTarget,
+        *SelfType => *SpecializationTarget,
+        *const SelfType => *const SpecializationTarget,
+        else => PossibleSelf,
+    };
+}
+
 fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
-    const impl_info = switch (@typeInfo(VTableT)) {
+    const v_info = @typeInfo(VTableT).Struct;
+
+    const impl_info_new = switch (@typeInfo(ImplT)) {
         .Struct => |info| info,
-        else => |tag| fmtError("VTable {} is not a struct (found {s})", .{ VTableT, @tagName(tag) }),
+        else => |tag| fmtError(
+            "VTable {}: impl type {} is not a struct (found {s})",
+            .{ VTableT, ImplT, @tagName(tag) },
+        ),
     };
 
-    switch (@typeInfo(ImplT)) {
-        .Struct => {},
-        else => |tag| fmtError("VTable {}: impl type {} is not a struct (found {s})", .{ VTableT, ImplT, @tagName(tag) }),
-    }
-
     // Check if the impl has all the needed methods.
-    for (impl_info.decls) |decl| {
-        if (getField(VTableT, decl.name)) |v_field| {
+    for (impl_info_new.decls) |impl_decl| {
+        if (getField(VTableT, impl_decl.name)) |v_field| {
             // This declaration is the impl of a VTable requirement.
 
-            const decl_type = switch (decl.data) {
+            const impl_decl_type = switch (impl_decl.data) {
                 .Fn => |data| data.fn_type,
                 .Type, .Var => |type_| type_,
             };
@@ -253,59 +266,74 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 // Since, for the impl, SelfType is gonna be the type of the impl, we need to iterate over the args to
                 // compare that.
 
-                const impl_fn = if (unwrapUnion(@typeInfo(decl_type), .Fn)) |info|
+                const impl_fn = if (unwrapUnion(@typeInfo(impl_decl_type), .Fn)) |info|
                     info
                 else
                     // TODO: use a different name than "impl target ..." because this is really confusing
-                    fmtError("VTable {}: Impl target declaration is not a function (expected function, found {})", .{ VTableT, decl_type });
+                    fmtError("VTable {}: impl target declaration is not a function (expected function, found {})", .{ VTableT, decl_type });
 
                 // Compare caling conventions
                 if (v_fn.calling_convention != impl_fn.calling_convention) {
-                    fmtError("VTable {}: Impl fn has wrong calling convention (expected {}, found {})", .{ VTableT, v_fn.calling_convention, impl_fn.calling_convention });
+                    fmtError("VTable {}: impl fn has wrong calling convention (expected {}, found {})", .{ VTableT, v_fn.calling_convention, impl_fn.calling_convention });
                 }
 
                 // Compare amount of args
                 if (impl_fn.args.len != v_fn.args.len) {
-                    fmtError("VTable {}: Impl target function has wrong number of arguments (expected {}, found {})", .{ VTableT, v_args.len, impl_fn.args.len });
+                    fmtError("VTable {}: impl target function has wrong number of arguments (expected {}, found {})", .{ VTableT, v_fn.args.len, impl_fn.args.len });
                 }
 
                 // Compare arg types
                 var i: usize = 0;
-                while (i < v_fn.args.len) {
-                    const expectType = struct {
-                        pub fn func(comptime Expected: type, comptime Found: type, comptime index: usize) void {
-                            if (Expected != Found)
-                                fmtError("VTable {}: wrong type for arg #{}: expected {}, found {}", .{ VTableT, index, Expected, Found }); // TODO: a more descriptive error message
-                        }
-                    }.func;
+                while (i < v_fn.args.len) : (i += 1) {
+                    const v_arg_type = SelfTypeSpecializeOnto(ImplT, v_fn.args[i].arg_type.?); // FIXME: generic unreachable
+                    const impl_arg_type = impl_fn.args[i].arg_type.?; // FIXME: generic unreachable
 
-                    // FIXME: how to handle generic functions here? `.?`
-                    const v_arg_type = v_fn.args[i].arg_type.?;
-                    const impl_arg_type = impl_fn.args[i].arg_type.?;
+                    if (v_arg_type != impl_arg_type) fmtError(
+                        "VTable {}: mismatched types for arg #{}: expected {}, found {}",
+                        .{VTableT, i, v_arg_type, impl_arg_type},
+                    );
 
-                    switch (v_arg_type) {
-                        *SelfType => expectType(*ImplT, impl_arg_type, i),
-                        *const SelfType => expectType(*const ImplT, impl_arg_type, i),
-                        SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
-                        else => expectType(v_arg_type, impl_arg_type, i),
-                    }
+                    // const expectType = struct {
+                    //     pub fn func(comptime Expected: type, comptime Found: type, comptime index: usize) void {
+                    //         if (Expected != Found) fmtError(
+                    //             "VTable {}: wrong type for arg #{}: expected {}, found {}",
+                    //             .{ VTableT, index, Expected, Found },
+                    //         ); // TODO: a more descriptive error message
+                    //     }
+                    // }.func;
+
+                    // switch (v_arg_type) {
+                    //     *SelfType => expectType(*ImplT, impl_arg_type, i),
+                    //     // *SelfType => expectType(*ImplT, impl_arg_type, i),
+                    //     *const SelfType => expectType(*const ImplT, impl_arg_type, i),
+                    //     SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
+                    //     else => expectType(v_arg_type, impl_arg_type, i),
+                    // }
                 }
 
                 // Compare return type
                 {
-                    const expectType = struct {
-                        pub fn func(comptime Expected: type, comptime Found: type) void {
-                            if (Expected != Found)
-                                fmtError("VTable {}: wrong type for return type: expected {}, found {}", .{ VTableT, Expected, Found }); // TODO: a more descriptive error message
-                        }
-                    }.func;
+                    const v_return_type = SelfTypeSpecializeOnto(ImplT, v_fn.return_type.?); // FIXME: generic unreachable
+                    const impl_return_type = impl_fn.return_type.?; // FIXME: generic unreachable
 
-                    switch (v_fn.return_type) {
-                        *SelfType => expectType(*ImplT, impl_fn.return_type),
-                        *const SelfType => expectType(*const ImplT, impl_fn.return_type),
-                        SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
-                        else => expectType(v_arg_type, impl_fn.return_type),
-                    }
+                    if (v_return_type != impl_return_type) fmtError(
+                        "VTable {}: mismatched return types: expected {}, found {}",
+                        .{VTableT, v_return_type, impl_return_type},
+                    );
+
+                    // const expectType = struct {
+                    //     pub fn func(comptime Expected: type, comptime Found: type) void {
+                    //         if (Expected != Found)
+                    //             fmtError("VTable {}: wrong type for return type: expected {}, found {}", .{ VTableT, Expected, Found }); // TODO: a more descriptive error message
+                    //     }
+                    // }.func;
+
+                    // switch (v_fn.return_type.?) { 
+                    //     *SelfType => expectType(*ImplT, impl_fn.return_type),
+                    //     *const SelfType => expectType(*const ImplT, impl_fn.return_type),
+                    //     SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
+                    //     else => expectType(v_fn.return_type.?, impl_fn.return_type.?),
+                    // }
                 }
 
                 // Compare alignment
@@ -322,13 +350,13 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     fmtError("VTable {}: impl target declaration is of wrong type (expected {}, found {})", .{ VTableT, v_field.field_type, decl_type });
                 }
             }
-        } else if (getDecl(VTableT, decl.name)) |v_decl| {
+        } else if (getDecl(VTableT, impl_decl.name)) |v_decl| {
             // This declaration is overriding one that already was defined in the VTable.
             //
             // We can allow this if the VTable declaration is private, since it is only used inside the VTable
             // declaration.
             if (v_decl.is_pub) {
-                fmtError("VTable {}: impl target declaration {s} overrides public declaration of same name in VTable type", .{ VTableT, decl.name });
+                fmtError("VTable {}: impl target declaration {s} overrides public declaration of same name in VTable type", .{ VTableT, impl_decl.name });
             }
         }
     }
@@ -349,8 +377,9 @@ fn isMethod(comptime FunctionType: type) bool {
 }
 
 fn getField(comptime VTableT: type, comptime name: []const u8) ?StructField {
-    for (@typeInfo(VTableT.Struct.fields)) |field| {
-        if (field.name == name) return field;
+    for (@typeInfo(VTableT).Struct.fields) |field| {
+        if (std.mem.eql(u8, field.name, name))
+            return field;
     }
 
     return null;
@@ -385,12 +414,16 @@ fn VTableFuncReturnType(comptime VTableT: type, comptime name: []const u8) type 
 
 /// NOTE: only call this if VTableT is already verified and ImplT is verified as a member of VTableT
 fn vTableGetImpl(comptime VTableT: type, comptime ImplT: type) *const VTableT {
-    return comptime blk: {
+    comptime {
         var vtable: VTableT = undefined;
 
         for (@typeInfo(VTableT).Struct.fields) |v_field| {
             const FieldType = @TypeOf(@field(vtable, v_field.name));
-            const impl_decl = @field(ImplT, v_field.name);
+
+            const impl_decl = if (@hasDecl(ImplT, v_field.name))
+                @field(ImplT, v_field.name)
+            else
+                fmtError("VTable {}: impl type {} does not have required decl: {s}", .{ VTableT, ImplT, identQuote(v_field.name) });
 
             @field(vtable, v_field.name) = if (meta.trait.is(.Fn)(FieldType))
                 @ptrCast(@TypeOf(@field(vtable, v_field.name)), impl_decl)
@@ -398,6 +431,6 @@ fn vTableGetImpl(comptime VTableT: type, comptime ImplT: type) *const VTableT {
                 impl_decl;
         }
 
-        break :blk &vtable;
-    };
+        return &vtable;
+    }
 }
