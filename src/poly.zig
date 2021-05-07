@@ -64,6 +64,8 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 vtable_ptr: *const VTableT,
                 object_ptr: *SelfType,
 
+                pub const _InterfaceBaseType = IFaceSelf;
+
                 pub fn init(ptr: anytype) @This() {
                     const ChildType = PointerChildType(@TypeOf(ptr));
                     expectIsMutablePointer(@TypeOf(ptr));
@@ -111,8 +113,6 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                         return @call(.{}, fn_ptr, args);
                     }
                 }
-
-                pub const _InterfaceBaseType = IFaceSelf;
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
 
@@ -120,6 +120,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     validateVTableImpl(VTableT, Target);
                 }
 
+                pub const _InterfaceBaseType = IFaceSelf;
                 pub const vtable_ptr: *const VTableT = comptime vTableGetImpl(VTableT, Target);
 
                 pub fn init(ptr: *Target) @This() {
@@ -141,15 +142,12 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
                     const fn_ptr = comptime @field(vtable_ptr, name);
 
-                    // FIXME: this will error out if args refers any other `SelfType` argument other than the first arg.
                     if (comptime isMethod(func_type)) {
-                        return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
+                        return @call(.{}, fn_ptr, .{self.object_ptr} ++ args); // FIXME: how and why is SelfType automatically casting to the specialized types?
                     } else {
                         return @call(.{}, fn_ptr, args);
                     }
                 }
-
-                pub const _InterfaceBaseType = IFaceSelf;
             } else unreachable;
         }
 
