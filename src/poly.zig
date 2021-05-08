@@ -96,16 +96,27 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     };
                 }
 
+                /// Call a function from the VTable, using dynamic dispatching.
+                ///
+                /// Will automatically call as a method if the function is one.
+                ///
+                /// Note: not all functions can be called via dynamic dispatch - see { TODO } for more details.
                 pub fn call(
                     self: @This(),
-                    comptime name: []const u8,
+                    comptime fn_name: []const u8,
                     args: anytype,
-                ) callconv(.Inline) VTableFuncReturnType(VTableT, name) {
+                ) callconv(.Inline) VTableFuncReturnType(VTableT, fn_name) {
                     // VTableFuncReturnType already asserts the following type is a function, so we don't need to worry
                     // about that.
-                    const func_type = comptime VTableFieldType(VTableT, name);
+                    const func_type = comptime VTableFieldType(VTableT, fn_name);
+                    const reflection = comptime FnReflection.analyze(func_type);
 
-                    const fn_ptr = @field(self.vtable_ptr, name);
+                    comptime if (reflection.requires_static_dispatching) fmtError(
+                        "Attempted to call static-dispatching-only method {s} (of type {}) with dynamic dispatching",
+                        .{ identQuote(fn_name), func_type },
+                    );
+
+                    const fn_ptr = @field(self.vtable_ptr, fn_name);
 
                     if (comptime isMethod(func_type)) {
                         return @call(.{}, fn_ptr, .{self.object_ptr} ++ args);
@@ -131,6 +142,11 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initSpecific, self.object_ptr);
                 }
 
+                /// Call a function from the VTable, using static dispatching.
+                ///
+                /// Will automatically call as a method if the function is one.
+                ///
+                /// Note: not all functions can be called via dynamic dispatch - see { TODO } for more details.
                 pub fn call(
                     self: @This(),
                     comptime name: []const u8,
@@ -288,7 +304,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
 
                     if (v_arg_type != impl_arg_type) fmtError(
                         "VTable {}: mismatched types for arg #{}: expected {}, found {}",
-                        .{VTableT, i, v_arg_type, impl_arg_type},
+                        .{ VTableT, i, v_arg_type, impl_arg_type },
                     );
 
                     // const expectType = struct {
@@ -316,7 +332,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
 
                     if (v_return_type != impl_return_type) fmtError(
                         "VTable {}: mismatched return types: expected {}, found {}",
-                        .{VTableT, v_return_type, impl_return_type},
+                        .{ VTableT, v_return_type, impl_return_type },
                     );
 
                     // const expectType = struct {
@@ -326,7 +342,7 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                     //     }
                     // }.func;
 
-                    // switch (v_fn.return_type.?) { 
+                    // switch (v_fn.return_type.?) {
                     //     *SelfType => expectType(*ImplT, impl_fn.return_type),
                     //     *const SelfType => expectType(*const ImplT, impl_fn.return_type),
                     //     SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
@@ -375,20 +391,25 @@ fn isMethod(comptime FunctionType: type) bool {
 }
 
 fn getField(comptime VTableT: type, comptime name: []const u8) ?StructField {
-    for (@typeInfo(VTableT).Struct.fields) |field| {
-        if (std.mem.eql(u8, field.name, name))
-            return field;
-    }
+    comptime {
+        for (@typeInfo(VTableT).Struct.fields) |field| {
+            if (std.mem.eql(u8, field.name, name))
+                return field;
+        }
 
-    return null;
+        return null;
+    }
 }
 
 fn getDecl(comptime VTableT: type, comptime name: []const u8) ?Declaration {
-    for (@typeInfo(VTableT).Struct.decls) |decl| {
-        if (decl.name == name) return decl;
-    }
+    comptime {
+        for (@typeInfo(VTableT).Struct.decls) |decl| {
+            if (decl.name == name)
+                return decl;
+        }
 
-    return null;
+        return null;
+    }
 }
 
 fn makeSelfPtr(comptime Source: type, ptr: *Source) *SelfType {
@@ -405,8 +426,8 @@ fn VTableFuncReturnType(comptime VTableT: type, comptime name: []const u8) type 
     const field_type = VTableFieldType(VTableT, name);
 
     return switch (@typeInfo(field_type)) {
-        .Fn => |info| info.return_type.?,
-        else => fmtError("VTable {}: field \"{s}\" is not a function (found {})", .{ VTableT, name, field_type }),
+        .Fn => |info| info.return_type.?, // FIXME: generic unreachable
+        else => fmtError("VTable {}: field {s} is not a function (found {})", .{ VTableT, identQuote(name), field_type }),
     };
 }
 
@@ -432,3 +453,52 @@ fn vTableGetImpl(comptime VTableT: type, comptime ImplT: type) *const VTableT {
         return &vtable;
     }
 }
+
+const FnReflection = struct {
+    is_generic: bool,
+    requires_inline_storage: bool,
+    requires_static_dispatching: bool,
+
+    /// Analyze a function type and create an instance of this struct.
+    ///
+    /// Should only be used with VTable function fields (that doesn't include the impls!).
+    pub fn analyze(comptime FnType: type) @This() {
+        const info = @typeInfo(FnType).Fn;
+
+        var requires_inline_storage = false;
+        var requires_static_dispatching = info.is_generic;
+
+        const is_method = info.args.len > 0 and if (info.args[0].arg_type) |arg_type|
+            switch (arg_type) {
+                *const SelfType, *SelfType => true,
+                SelfType => blk: {
+                    requires_inline_storage = true;
+                    break :blk true;
+                },
+                else => false,
+            }
+        else blk: {
+            requires_static_dispatching = true;
+            break :blk false;
+        };
+
+        for (info.args[1..]) |arg| {
+            if (arg.arg_type) |arg_type|
+                switch (arg_type) {
+                    SelfType, *const SelfType, *SelfType => {
+                        requires_static_dispatching = true; // TODO: add a "reason" variable for these checks
+                    },
+                    else => {},
+                }
+            else {
+                requires_static_dispatching = true;
+            }
+        }
+
+        return @This(){
+            .is_generic = info.is_generic,
+            .requires_inline_storage = requires_inline_storage,
+            .requires_static_dispatching = requires_static_dispatching,
+        };
+    }
+};

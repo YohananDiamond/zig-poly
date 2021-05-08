@@ -4,7 +4,7 @@ const testing = std.testing;
 const poly = @import("../poly.zig");
 
 const SelfReferencing = poly.Interface(struct {
-    isSame: fn (self: *poly.SelfType, rhs: *poly.SelfType) bool, // FIXME: this is incompatible with the impl, yet it does not error out
+    isSame: fn (self: *poly.SelfType, rhs: *poly.SelfType) bool,
 }, .{});
 
 const St = struct {
@@ -26,7 +26,8 @@ test "self-referencing method" {
     testing.expect(!iface.call("isSame", .{&st2}));
 }
 
-// test "self-referencing method (dynamically dispatched)" { // TODO: make this a compile error - SelfType as a non-self function argument in dynamic dispatching
+// Works as expected (compile error message), but can't let it here or the other tests won't run.
+// test "self-referencing method (dynamically dispatched)" {
 //     var st1 = St{};
 //     var st2 = St{};
 //     const iface = SelfReferencing.Impl(.Dyn).init(&st1);
