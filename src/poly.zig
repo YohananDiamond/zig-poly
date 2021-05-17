@@ -54,7 +54,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
 
             const target: TargetKind = switch (@typeInfo(@TypeOf(target_))) {
                 .EnumLiteral => if (target_ == .Dyn) .Dynamic else {
-                    fmtError("Invalid impl target (expected .Dyn or a type, found .{})", .{@tagName(target_)});
+                    fmtError("Invalid impl target (expected .Dyn or a type, found {})", .{target_});
                 },
                 .Type => .{ .Static = target_ },
                 else => fmtError("Invalid impl target (expected .Dyn or a type, found {})", .{@TypeOf(target_)}),
@@ -102,7 +102,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 ///
                 /// Note: not all functions can be called via dynamic dispatch - see { TODO } for more details.
                 pub fn call(
-                    self: @This(),
+                    self: *const @This(),
                     comptime fn_name: []const u8,
                     args: anytype,
                 ) callconv(.Inline) VTableFuncReturnType(VTableT, fn_name) {
@@ -123,6 +123,10 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     } else {
                         return @call(.{}, fn_ptr, args);
                     }
+                }
+
+                pub fn get(self: *const @This(), comptime field_name: []const u8) callconv(.Inline) VTableFieldType(VTableT, field_name) {
+                    return @field(self.vtable_ptr, field_name);
                 }
             } else if (unwrapUnion(target, .Static)) |Target| struct {
                 object_ptr: *Target,
@@ -148,7 +152,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 ///
                 /// Note: not all functions can be called via dynamic dispatch - see { TODO } for more details.
                 pub fn call(
-                    self: @This(),
+                    self: *const @This(),
                     comptime name: []const u8,
                     args: anytype,
                 ) callconv(.Inline) VTableFuncReturnType(VTableT, name) {
@@ -163,6 +167,10 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     } else {
                         return @call(.{}, fn_ptr, args);
                     }
+                }
+
+                pub fn get(self: *const @This(), comptime field_name: []const u8) callconv(.Inline) VTableFieldType(VTableT, field_name) {
+                    return @field(vtable_ptr, field_name);
                 }
             } else unreachable;
         }
@@ -238,7 +246,7 @@ fn validateVTable(comptime VTableT: type) void {
                     else => fmtError("VTable {}: TODO: support more calling conventions", .{VTableT}),
                 }
             },
-            else => fmtError("VTable {}: TODO: support non-function VTable fields", .{VTableT}),
+            else => {},
         }
     }
 }
@@ -274,95 +282,67 @@ fn validateVTableImpl(comptime VTableT: type, comptime ImplT: type) void {
                 .Type, .Var => |type_| type_,
             };
 
-            if (unwrapUnion(@typeInfo(v_field.field_type), .Fn)) |v_fn| {
-                // The field is a function.
-                //
-                // Since, for the impl, SelfType is gonna be the type of the impl, we need to iterate over the args to
-                // compare that.
+            switch (@typeInfo(v_field.field_type)) {
+                .Fn => |v_fn| {
+                    // The field is a function.
+                    //
+                    // Since, for the impl, SelfType is gonna be the type of the impl, we need to iterate over the args to
+                    // compare that.
 
-                const impl_fn = if (unwrapUnion(@typeInfo(impl_decl_type), .Fn)) |info|
-                    info
-                else
-                    // TODO: use a different name than "impl target ..." because this is really confusing
-                    fmtError("VTable {}: impl target declaration is not a function (expected function, found {})", .{ VTableT, decl_type });
+                    const impl_fn = if (unwrapUnion(@typeInfo(impl_decl_type), .Fn)) |info|
+                        info
+                    else
+                        // TODO: use a different name than "impl target ..." because this is really confusing
+                        fmtError("VTable {}: impl target declaration is not a function (expected function, found {})", .{ VTableT, decl_type });
 
-                // Compare caling conventions
-                if (v_fn.calling_convention != impl_fn.calling_convention) {
-                    fmtError("VTable {}: impl fn has wrong calling convention (expected {}, found {})", .{ VTableT, v_fn.calling_convention, impl_fn.calling_convention });
-                }
+                    // Compare caling conventions
+                    if (v_fn.calling_convention != impl_fn.calling_convention) {
+                        fmtError("VTable {}: impl fn has wrong calling convention (expected {}, found {})", .{ VTableT, v_fn.calling_convention, impl_fn.calling_convention });
+                    }
 
-                // Compare amount of args
-                if (impl_fn.args.len != v_fn.args.len) {
-                    fmtError("VTable {}: impl target function has wrong number of arguments (expected {}, found {})", .{ VTableT, v_fn.args.len, impl_fn.args.len });
-                }
+                    // Compare amount of args
+                    if (impl_fn.args.len != v_fn.args.len) {
+                        fmtError("VTable {}: impl target function has wrong number of arguments (expected {}, found {})", .{ VTableT, v_fn.args.len, impl_fn.args.len });
+                    }
 
-                // Compare arg types
-                var i: usize = 0;
-                while (i < v_fn.args.len) : (i += 1) {
-                    const v_arg_type = SelfTypeSpecializeOnto(ImplT, v_fn.args[i].arg_type.?); // FIXME: generic unreachable
-                    const impl_arg_type = impl_fn.args[i].arg_type.?; // FIXME: generic unreachable
+                    // Compare arg types
+                    var i: usize = 0;
+                    while (i < v_fn.args.len) : (i += 1) {
+                        const v_arg_type = SelfTypeSpecializeOnto(ImplT, v_fn.args[i].arg_type.?); // FIXME: generic unreachable
+                        const impl_arg_type = impl_fn.args[i].arg_type.?; // FIXME: generic unreachable
 
-                    if (v_arg_type != impl_arg_type) fmtError(
-                        "VTable {}: mismatched types for arg #{}: expected {}, found {}",
-                        .{ VTableT, i, v_arg_type, impl_arg_type },
-                    );
+                        if (v_arg_type != impl_arg_type) fmtError(
+                            "VTable {}: mismatched types for arg #{}: expected {}, found {}",
+                            .{ VTableT, i, v_arg_type, impl_arg_type },
+                        );
+                    }
 
-                    // const expectType = struct {
-                    //     pub fn func(comptime Expected: type, comptime Found: type, comptime index: usize) void {
-                    //         if (Expected != Found) fmtError(
-                    //             "VTable {}: wrong type for arg #{}: expected {}, found {}",
-                    //             .{ VTableT, index, Expected, Found },
-                    //         ); // TODO: a more descriptive error message
-                    //     }
-                    // }.func;
+                    // Compare return type
+                    {
+                        const v_return_type = SelfTypeSpecializeOnto(ImplT, v_fn.return_type.?); // FIXME: generic unreachable
+                        const impl_return_type = impl_fn.return_type.?; // FIXME: generic unreachable
 
-                    // switch (v_arg_type) {
-                    //     *SelfType => expectType(*ImplT, impl_arg_type, i),
-                    //     // *SelfType => expectType(*ImplT, impl_arg_type, i),
-                    //     *const SelfType => expectType(*const ImplT, impl_arg_type, i),
-                    //     SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
-                    //     else => expectType(v_arg_type, impl_arg_type, i),
-                    // }
-                }
+                        if (v_return_type != impl_return_type) fmtError(
+                            "VTable {}: mismatched return types: expected {}, found {}",
+                            .{ VTableT, v_return_type, impl_return_type },
+                        );
+                    }
 
-                // Compare return type
-                {
-                    const v_return_type = SelfTypeSpecializeOnto(ImplT, v_fn.return_type.?); // FIXME: generic unreachable
-                    const impl_return_type = impl_fn.return_type.?; // FIXME: generic unreachable
+                    // Compare alignment
+                    // FIXME: is this necessary?
+                    if (impl_fn.alignment != v_fn.alignment) {
+                        fmtError("VTable {}: impl target function has wrong alignment (expected {}, found {})", .{ VTableT, v_fn.alignment, impl_fn.alignment });
+                    }
 
-                    if (v_return_type != impl_return_type) fmtError(
-                        "VTable {}: mismatched return types: expected {}, found {}",
-                        .{ VTableT, v_return_type, impl_return_type },
-                    );
-
-                    // const expectType = struct {
-                    //     pub fn func(comptime Expected: type, comptime Found: type) void {
-                    //         if (Expected != Found)
-                    //             fmtError("VTable {}: wrong type for return type: expected {}, found {}", .{ VTableT, Expected, Found }); // TODO: a more descriptive error message
-                    //     }
-                    // }.func;
-
-                    // switch (v_fn.return_type.?) {
-                    //     *SelfType => expectType(*ImplT, impl_fn.return_type),
-                    //     *const SelfType => expectType(*const ImplT, impl_fn.return_type),
-                    //     SelfType => unreachable, // FIXME: this probably shouldn't be true with static/inline storage
-                    //     else => expectType(v_fn.return_type.?, impl_fn.return_type.?),
-                    // }
-                }
-
-                // Compare alignment
-                // FIXME: is this necessary?
-                if (impl_fn.alignment != v_fn.alignment) {
-                    fmtError("VTable {}: impl target function has wrong alignment (expected {}, found {})", .{ VTableT, v_fn.alignment, impl_fn.alignment });
-                }
-
-                // TODO: Do something with: v_fn.is_generic
-                // TODO: Do something with: v_fn.is_var_args
-            } else {
-                // The field is not a function - we can do a simple comparation.
-                if (decl_type != v_field.field_type) {
-                    fmtError("VTable {}: impl target declaration is of wrong type (expected {}, found {})", .{ VTableT, v_field.field_type, decl_type });
-                }
+                    // TODO: Do something with: v_fn.is_generic
+                    // TODO: Do something with: v_fn.is_var_args
+                },
+                else => {
+                    // The field is not a function - we can do a simple comparation.
+                    if (impl_decl_type != v_field.field_type) {
+                        fmtError("VTable {}: impl target declaration is of wrong type (expected {}, found {})", .{ VTableT, v_field.field_type, impl_decl_type });
+                    }
+                },
             }
         } else if (getDecl(VTableT, impl_decl.name)) |v_decl| {
             // This declaration is overriding one that already was defined in the VTable.
