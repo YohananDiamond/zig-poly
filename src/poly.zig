@@ -20,12 +20,15 @@ test "entry point" {
 
 // TODO: proper error messages for every compile-error here
 
+/// An opaque type to represent the "self" on an interface signature.
 pub const SelfType = opaque {};
 
+/// Options for initializing an interface.
 pub const InterfaceOptions = struct {
     async_call_stack_size: usize = 1 * 1024 * 1024,
 };
 
+/// Construct an interface that requires an implementation of the fields in `VTableT`, with options in `options`.
 pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) type {
     validateVTable(VTableT);
 
@@ -35,17 +38,27 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
         pub const VTableType = VTableT;
         pub const interface_options = options;
 
-        pub fn isBaseOf(comptime IType: type) bool { // TODO: terminology: define "base"
+        /// Check if `ImplT` is a base of this interface.
+        ///
+        /// TODO: define `base`.
+        pub fn isBaseOf(comptime ImplT: type) bool {
             comptime {
                 const field_name = "_InterfaceBaseType";
 
-                if (!meta.trait.is(.Struct)(IType)) return false;
-                if (!@hasDecl(IType, field_name)) return false;
-                if (@TypeOf(@field(IType, field_name)) != type) return false;
-                return @field(IType, field_name) == IFaceSelf;
+                if (!meta.trait.is(.Struct)(ImplT)) return false;
+                if (!@hasDecl(ImplT, field_name)) return false;
+                if (@TypeOf(@field(ImplT, field_name)) != type) return false;
+                return @field(ImplT, field_name) == IFaceSelf;
             }
         }
 
+        /// Create an implementation of this interface for `target_`.
+        ///
+        /// If `target_` is `.Dyn`, return a dynamic dispatched implementation.
+        ///
+        /// If `target_` is a type T, return a statically dispatched implementation for said type.
+        ///
+        /// Otherwise, return an error.
         pub fn Impl(comptime target_: anytype) type {
             const TargetKind = union(enum) {
                 Dynamic: void,
@@ -64,6 +77,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                 vtable_ptr: *const VTableT,
                 object_ptr: *SelfType,
 
+                /// The base interface type for this impl.
                 pub const _InterfaceBaseType = IFaceSelf;
 
                 pub fn init(ptr: anytype) @This() {
@@ -73,7 +87,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     return @call(.{ .modifier = .always_inline }, initSpecific, .{ ChildType, ptr });
                 }
 
-                /// Initializes the interface while specifying a specific type.
+                /// Initialize the interface while specifying a specific type.
                 ///
                 /// Does the same as `init`, but doesn't infer anything, requiring the explicit type.
                 ///
@@ -88,6 +102,8 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     };
                 }
 
+                /// Initialize with a custom vtable and pointer.
+                ///
                 /// The impl returned by this should not live longer that `vtable` or `erased_ptr`.
                 pub fn initWithVTable(vtable: *const VTableT, erased_ptr: *SelfType) @This() {
                     return .{
@@ -125,6 +141,7 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     }
                 }
 
+                /// Get a specific field on the VTable.
                 pub fn get(self: *const @This(), comptime field_name: []const u8) callconv(.Inline) VTableFieldType(VTableT, field_name) {
                     return @field(self.vtable_ptr, field_name);
                 }
@@ -135,14 +152,22 @@ pub fn Interface(comptime VTableT: type, comptime options: InterfaceOptions) typ
                     validateVTableImpl(VTableT, Target);
                 }
 
+                /// The base interface type for this impl.
                 pub const _InterfaceBaseType = IFaceSelf;
+
+                /// A comptime-known VTable pointer.
+                ///
+                /// Since it's comptime-known, we can use this impl without dynamic dispatching.
                 pub const vtable_ptr: *const VTableT = comptime vTableGetImpl(VTableT, Target);
 
+                /// Initialize this interface with a pointer.
                 pub fn init(ptr: *Target) @This() {
                     return .{ .object_ptr = ptr };
                 }
 
+                /// Convert this interface to a dynamic dispatch one.
                 pub fn asDyn(self: Self) Impl(.Dyn) {
+                    // TODO: check if this should be possible
                     return @call(.{ .modifier = .AlwaysInline }, Impl(.Dyn).initSpecific, self.object_ptr);
                 }
 
