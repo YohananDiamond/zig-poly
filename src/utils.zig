@@ -18,9 +18,9 @@ pub fn unwrapUnion(un: anytype, comptime tag: Tag(@TypeOf(un))) ?TagPayload(@Typ
 }
 
 pub fn identQuote(comptime name: []const u8) []const u8 {
-    comptime var should_quote: bool = false;
-
     comptime {
+    var should_quote: bool = false;
+
         if (name.len > 0) switch (name[0]) {
             'a'...'z', 'A'...'Z' => {},
             else => should_quote = true,
@@ -35,18 +35,14 @@ pub fn identQuote(comptime name: []const u8) []const u8 {
                 else => should_quote = false,
             }
         }
-    }
 
-    return comptime string: {
-        if (should_quote) {
+        return if (should_quote) blk: {
             // TODO: escape special characters n' stuff
-            break :string "@\"" ++ name ++ "\"";
-        } else {
-            break :string name;
-        }
-    };
+            break :blk "@\"" ++ name ++ "\"";
+        } else name;
+    }
 }
 
 test "quoting" {
-    testing.expect(std.mem.eql(u8, identQuote("helloWorld"), "helloWorld"));
+    try testing.expect(std.mem.eql(u8, identQuote("helloWorld"), "helloWorld"));
 }

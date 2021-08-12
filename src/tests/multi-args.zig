@@ -22,8 +22,8 @@ test "self-referencing method" {
     var st2 = St{};
     const iface = SelfReferencing.Impl(St).init(&st1);
 
-    testing.expect(iface.call("isSame", .{&st1}));
-    testing.expect(!iface.call("isSame", .{&st2}));
+    try testing.expect(iface.call("isSame", .{&st1}));
+    try testing.expect(!iface.call("isSame", .{&st2}));
 }
 
 // Works as expected (compile error message), but can't let it here or the other tests won't run.
@@ -32,6 +32,6 @@ test "self-referencing method" {
 //     var st2 = St{};
 //     const iface = SelfReferencing.Impl(.Dyn).init(&st1);
 
-//     testing.expect(iface.call("isSame", .{&st1}));
-//     testing.expect(!iface.call("isSame", .{&st2}));
+//     try testing.expect(iface.call("isSame", .{&st1}));
+//     try testing.expect(!iface.call("isSame", .{&st2}));
 // }

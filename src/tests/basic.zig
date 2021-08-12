@@ -27,14 +27,14 @@ test "simple static dispatching" {
     var five_n = Five{};
     const magic_num = MagicNumber.staticInit(&five_n);
 
-    testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
+    try testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
 }
 
 test "simple dynamic dispatching" {
     var five_n = Five{};
     const magic_num = MagicNumber.dynamicInit(&five_n);
 
-    testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
+    try testing.expect(magic_num.call("getMagicNumber", .{}) == 5);
 }
 
 test "dynamic dispatching inside array" {
@@ -47,15 +47,15 @@ test "dynamic dispatching inside array" {
     try list.append(MagicNumber.dynamicInit(&five_n));
     try list.append(MagicNumber.dynamicInit(&six_n));
 
-    testing.expect(list.items[0].call("getMagicNumber", .{}) == 5);
-    testing.expect(list.items[1].call("getMagicNumber", .{}) == 6);
+    try testing.expect(list.items[0].call("getMagicNumber", .{}) == 5);
+    try testing.expect(list.items[1].call("getMagicNumber", .{}) == 6);
 }
 
 test "check if is interface" {
-    testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(.Dyn)));
-    testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(Five)));
-    testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(Six)));
-    testing.expect(!MagicNumber.isBaseOf(i32));
+    try testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(.Dyn)));
+    try testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(Five)));
+    try testing.expect(MagicNumber.isBaseOf(MagicNumber.Impl(Six)));
+    try testing.expect(!MagicNumber.isBaseOf(i32));
 }
 
 test "function that takes interface as parameter (explicit impl kind)" {
@@ -68,13 +68,13 @@ test "function that takes interface as parameter (explicit impl kind)" {
     {
         var five_n = Five{};
         const result = local.function(Five, MagicNumber.staticInit(&five_n));
-        testing.expect(result == 5);
+        try testing.expect(result == 5);
     }
 
     {
         var six_n = Six{};
         const result = local.function(.Dyn, MagicNumber.dynamicInit(&six_n));
-        testing.expect(result == 6);
+        try testing.expect(result == 6);
     }
 }
 
@@ -92,12 +92,12 @@ test "function that takes interface as parameter (implicit impl kind)" {
     {
         var five_n = Five{};
         const result = local.function(MagicNumber.staticInit(&five_n));
-        testing.expect(result == 5);
+        try testing.expect(result == 5);
     }
 
     {
         var six_n = Six{};
         const result = local.function(MagicNumber.dynamicInit(&six_n));
-        testing.expect(result == 6);
+        try testing.expect(result == 6);
     }
 }

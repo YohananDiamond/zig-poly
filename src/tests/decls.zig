@@ -1,4 +1,4 @@
-//! Tests related to dispatching of declarations.
+//! Tests related to dispatching of declarations (instead of function).
 
 const std = @import("std");
 const testing = std.testing;
@@ -18,16 +18,16 @@ test "static dispatching + declarations" {
     var simple = SimpleImpl{};
     const iface = SimpleDeclFace.Impl(SimpleImpl).init(&simple);
 
-    testing.expect(iface.get("val1") == 16);
-    testing.expect(iface.get("val2") == 50);
+    try testing.expect(iface.get("val1") == 16);
+    try testing.expect(iface.get("val2") == 50);
 }
 
 test "dynamic dispatching + declarations" {
     var simple = SimpleImpl{};
     const iface = SimpleDeclFace.Impl(.Dyn).init(&simple);
 
-    testing.expect(iface.get("val1") == 16);
-    testing.expect(iface.get("val2") == 50);
+    try testing.expect(iface.get("val1") == 16);
+    try testing.expect(iface.get("val2") == 50);
 }
 
 const ComptimeOnlyFace = poly.Interface(struct {
@@ -38,9 +38,10 @@ const ComptimeImpl = struct {
     pub const ctime_val = i32;
 };
 
-// test "comptime-only interface because of type declaration" { // FIXME: this triggers an assertion failure
+// FIXME: this triggers an assertion failure - not sure how to test that
+// test "comptime-only interface because of type declaration" {
 //     var impl = ComptimeImpl{};
 //     const iface = ComptimeOnlyFace.Impl(ComptimeImpl).init(&impl);
 
-//     testing.expect(iface.get("ctime_val") == i32);
+//     try testing.expect(iface.get("ctime_val") == i32);
 // }

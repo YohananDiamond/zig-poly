@@ -1,7 +1,7 @@
 const std = @import("std");
 const meta = std.meta;
 
-const builtin = @import("builtin");
+const builtin = @import("std").builtin;
 const StructField = builtin.TypeInfo.StructField;
 const Declaration = builtin.TypeInfo.Declaration;
 
