@@ -8,7 +8,8 @@ Last tested on `zig-linux-x86_64-0.9.0-dev.749+259f3458a`
 
 The main benefit over `interface.zig` is that the dispatching can be
 done statically and dynamically, depending on the need. It's kind of
-verbose, but it seems functional. Here's an adapted example from the tests:
+verbose, but it seems to be functional. Here's an adapted example
+from the tests:
 
 ```zig
 const std = @import("std");
@@ -66,7 +67,7 @@ test {
 ```
 
 There's also early support for declaration dispatching. For more
-in-depth examples, see the `src/tests` folder.
+in-depth examples, see the [`src/tests`](src/tests) folder.
 
 This is a work in progress and there still are features that haven't
 been implemented (e.g. storage types other than "mutable pointer") or
